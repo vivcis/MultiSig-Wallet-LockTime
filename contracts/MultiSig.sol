@@ -22,8 +22,16 @@ contract MultiSigTimeLock {
         Status status;
     }
 
+    struct ApproveWithdrawal {
+        address to;
+        uint256 amount;
+        bool approved;
+        Status status;
+    }
+
     mapping(address => uint256) public balances;
     mapping(uint256 => Transaction) public txId;
+    mapping(uint256 => ApproveWithdrawal) public approveWithdrawal;
    // mapping(address => Transaction[]) public transactions;
 
     address[] public owners;
@@ -32,13 +40,45 @@ contract MultiSigTimeLock {
 
     uint256 public contractBalance;
 
-    event Deposited(uint256 indexed _amount, uint256 _Id);
+    uint256 public approveWithdrawalId;
 
-    constructor(address _owners){
+    event Deposited(uint256 indexed _amount, uint256 _Id);
+    event Approved(uint256 indexed _transactionId);
+    event Withdrawn(uint256 indexed _amount, uint256 _Id);
+
+    constructor(address[] memory _owners){
         owners = _owners
     }
 
-    function deposit() external payable{
+    modifier onlyOwners(){
+        bool owner = false;
+
+        for(uint i = 0; i < owners.length; i++){
+            if(owners[i] == msg.sender){
+                owner = true;
+            }
+        }
+        require(owner == true, "Only owners can call this function");
+        _;
+    }
+
+    function addUsers (address _user) external onlyOwners {
+        require(msg.sender == owners[0], "Only owner can add users");
+        owners.push(_user);
+    }
+
+    function removeUsers (address _user) external onlyOwners {
+        require(msg.sender == owners[0], "Only owner can remove users");
+
+        for(uint i = 0; i < owners.length; i++){
+            if(owners[i] == _user){
+                delete owners[i];
+            }
+        }
+    }
+
+    function deposit() external payable onlyOwners{
+        address contractBalance
         require(balances[msg.sender] > msg.value, "insufficient balance");
         require(msg.sender != address(0), "address zero not allowed");
 
@@ -64,41 +104,44 @@ contract MultiSigTimeLock {
     }
 
     function approveTransaction(uint256 _transactionId) external {
+
+        uint256 _approveWithdrawlId = approveWithdrawalId + 1;
         require(block.timestamp >= txId[_transactionId].unlockTime, "Transaction not yet unlocked");
         require(msg.sender != address(0), "address zero not allowed");
         require(QUOROM > 0, "Quorom not met");
+        require(approveWithdrawal[_approveWithdrawlId].approved == false, "Transaction already approved");
 
-        
+        ApproveWithdrawal memory approveWithdrawal = _ApprovalWithdrawal({
+            to : approveWithdrawal[_approveWithdrawlId].to,
+            amount : approveWithdrawal[_approveWithdrawlId].amount,
+            approved : true,
+            status : Status.APPROVED
+        });
+
+        approveWithdrawalId += 1;
+
+        emit Approved(_transactionId);
+
         //require(txId[_transactionId].status == Status.APPROVED, "Transaction already approved");
 
         // contractBalance -= transaction.amount;
 
     }
 
-    // uint public unlockTime;
-    // address payable public owner;
+    function withdraw(uint256 _txId, uint256 _amount) external onlyOwners {
+        require(msg.sender != address(0), "address zero not allowed");
+        require(contractBalance >= _amount, "Insufficient balance");
+        require(txId[_txId].amount == _amount, "Amount does not match transaction amount");
+        require(txId[_txId].status == Status.APPROVED, "Transaction not yet approved");
+        require(block.timestamp >= txId[_txId].unlockTime, "Transaction not yet unlocked");
+        
+        contractBalance -= _amount;
 
-    // event Withdrawal(uint amount, uint when);
+        ApproveWithdrawal memory _approveWithdrawal = approveWithdrawal(_txId);
 
-    // constructor(uint _unlockTime) payable {
-    //     require(
-    //         block.timestamp < _unlockTime,
-    //         "Unlock time should be in the future"
-    //     );
+        _approveWithdrawal.to.transfer(_amount);
 
-    //     unlockTime = _unlockTime;
-    //     owner = payable(msg.sender);
-    // }
-
-    // function withdraw() public {
-    //     // Uncomment this line, and the import of "hardhat/console.sol", to print a log in your terminal
-    //     // console.log("Unlock time is %o and block timestamp is %o", unlockTime, block.timestamp);
-
-    //     require(block.timestamp >= unlockTime, "You can't withdraw yet");
-    //     require(msg.sender == owner, "You aren't the owner");
-
-    //     emit Withdrawal(address(this).balance, block.timestamp);
-
-    //     owner.transfer(address(this).balance);
-    // }
+        emit Withdrawn(_amount, _txId);
+    }
+    
 }
