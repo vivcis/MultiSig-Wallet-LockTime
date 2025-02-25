@@ -7,10 +7,11 @@ pragma solidity ^0.8.28;
 contract MultiSigTimeLock {
 
     enum Status{
-        SENT;
-        DEPOSITED;
-        APPROVED;
-        WITHDRAWN;
+        SENT,
+        DEPOSITED,
+        APPROVED,
+        WITHDRAWN,
+        PENDING
     }
 
     struct Transaction {
@@ -27,16 +28,20 @@ contract MultiSigTimeLock {
         uint256 amount;
         bool approved;
         Status status;
+        uint256 noOfApproval;
+    
     }
 
     mapping(address => uint256) public balances;
     mapping(uint256 => Transaction) public txId;
     mapping(uint256 => ApproveWithdrawal) public approveWithdrawal;
+    mapping(uint256 => mapping(address => bool)) public hasApproved;
+    
    // mapping(address => Transaction[]) public transactions;
 
     address[] public owners;
 
-    uint256 public constant QUOROM =  owners.length * 51 / 100;
+    uint256 public  QUOROM =  owners.length * 51 / 100;
 
     uint256 public contractBalance;
 
@@ -47,7 +52,7 @@ contract MultiSigTimeLock {
     event Withdrawn(uint256 indexed _amount, uint256 _Id);
 
     constructor(address[] memory _owners){
-        owners = _owners
+        owners = _owners;
     }
 
     modifier onlyOwners(){
@@ -78,55 +83,77 @@ contract MultiSigTimeLock {
     }
 
     function deposit() external payable onlyOwners{
-        address contractBalance
+        // address contractBalance;
+        
         require(balances[msg.sender] > msg.value, "insufficient balance");
         require(msg.sender != address(0), "address zero not allowed");
 
         uint256 transactionId;
 
-        txId[transactionId] = Transaction{
-            amount = msg.value;
-            unlockTime = block.timestamp + 10 days;
-            currentTime = block.timestamp;
-            sent = true;
-            status = status.DEPOSITED;
-        }
+      txId[transactionId] = Transaction({
+            amount: msg.value,
+            unlockTime: block.timestamp + 10 days,
+            currentTime: block.timestamp,
+            sent: true,
+            status: Status.DEPOSITED
+        });
 
         transactionId += 1;
 
         contractBalance += msg.value;
 
-        emit Deposited(msg.value, transactionId)
+        emit Deposited(msg.value, transactionId);
     }
 
     function viewBalance() external view returns(uint256){
         return contractBalance;
     }
+   
 
-    function approveTransaction(uint256 _transactionId) external {
+    function approveTransaction(uint256 _transactionId, address _to, uint256 _amount) external {
+    require(block.timestamp >= txId[_transactionId].unlockTime, "Transaction not yet unlocked");
+    require(msg.sender != address(0), "Address zero not allowed");
+    require(QUOROM > 0, "Quorum not met");
 
-        uint256 _approveWithdrawlId = approveWithdrawalId + 1;
-        require(block.timestamp >= txId[_transactionId].unlockTime, "Transaction not yet unlocked");
-        require(msg.sender != address(0), "address zero not allowed");
-        require(QUOROM > 0, "Quorom not met");
-        require(approveWithdrawal[_approveWithdrawlId].approved == false, "Transaction already approved");
+    uint256 _approveWithdrawlId = approveWithdrawalId + 1;
 
-        ApproveWithdrawal memory approveWithdrawal = _ApprovalWithdrawal({
-            to : approveWithdrawal[_approveWithdrawlId].to,
-            amount : approveWithdrawal[_approveWithdrawlId].amount,
-            approved : true,
-            status : Status.APPROVED
+    // Ensure this transaction is not already approved
+    require(!approveWithdrawal[_approveWithdrawlId].approved, "Transaction already approved");
+
+    // Ensure the sender has not already approved this transaction
+    require(!hasApproved[_approveWithdrawlId][msg.sender], "Already approved by this user");
+
+    
+    if (approveWithdrawal[_approveWithdrawlId].noOfApproval == 0) {
+        approveWithdrawal[_approveWithdrawlId] = ApproveWithdrawal({
+            to: _to,
+            amount: _amount,
+            approved: false,
+            status: Status.PENDING,
+            noOfApproval: 1
         });
-
-        approveWithdrawalId += 1;
-
-        emit Approved(_transactionId);
-
-        //require(txId[_transactionId].status == Status.APPROVED, "Transaction already approved");
-
-        // contractBalance -= transaction.amount;
-
+    } else {
+        approveWithdrawal[_approveWithdrawlId].noOfApproval += 1;
     }
+
+    // Mark sender as having approved this transaction
+    hasApproved[_approveWithdrawlId][msg.sender] = true;
+
+    // Check if quorum is met
+    if (approveWithdrawal[_approveWithdrawlId].noOfApproval >= QUOROM) {
+        approveWithdrawal[_approveWithdrawlId].approved = true;
+        approveWithdrawal[_approveWithdrawlId].status = Status.APPROVED;
+    }
+
+    // Increment the approval transaction counter
+    approveWithdrawalId = _approveWithdrawlId;
+
+    emit Approved(_transactionId);
+}
+
+
+
+    
 
     function withdraw(uint256 _txId, uint256 _amount) external onlyOwners {
         require(msg.sender != address(0), "address zero not allowed");
@@ -137,9 +164,9 @@ contract MultiSigTimeLock {
         
         contractBalance -= _amount;
 
-        ApproveWithdrawal memory _approveWithdrawal = approveWithdrawal(_txId);
+        ApproveWithdrawal storage _approveWithdrawal = approveWithdrawal[_txId];
 
-        _approveWithdrawal.to.transfer(_amount);
+        payable(_approveWithdrawal.to).transfer(_amount);
 
         emit Withdrawn(_amount, _txId);
     }
