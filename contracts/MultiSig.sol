@@ -32,7 +32,7 @@ contract MultiSigTimeLock {
     
     }
 
-    mapping(address => uint256) public balances;
+    // mapping(address => uint256) public balances;
     mapping(uint256 => Transaction) public txId;
     mapping(uint256 => ApproveWithdrawal) public approveWithdrawal;
     mapping(uint256 => mapping(address => bool)) public hasApproved;
@@ -47,6 +47,8 @@ contract MultiSigTimeLock {
 
     uint256 public approveWithdrawalId;
 
+    uint256 public txCounter;
+
     event Deposited(uint256 indexed _amount, uint256 _Id);
     event Approved(uint256 indexed _transactionId);
     event Withdrawn(uint256 indexed _amount, uint256 _Id);
@@ -55,17 +57,23 @@ contract MultiSigTimeLock {
         owners = _owners;
     }
 
-    modifier onlyOwners(){
-        bool owner = false;
+modifier onlyOwners() {
+    bool isOwner = false;
 
-        for(uint i = 0; i < owners.length; i++){
-            if(owners[i] == msg.sender){
-                owner = true;
-            }
+    for (uint i = 0; i < owners.length; i++) {
+        if (owners[i] == msg.sender) {
+            isOwner = true;
+            break; 
         }
-        require(owner == true, "Only owners can call this function");
-        _;
     }
+    require(isOwner, "Only owners can call this function");
+    _;
+}
+
+
+function getOwners() external view returns (address[] memory) {
+    return owners;
+}
 
     function addUsers (address _user) external onlyOwners {
         require(msg.sender == owners[0], "Only owner can add users");
@@ -82,93 +90,87 @@ contract MultiSigTimeLock {
         }
     }
 
-    function deposit() external payable onlyOwners{
-        // address contractBalance;
-        
-        require(balances[msg.sender] > msg.value, "insufficient balance");
-        require(msg.sender != address(0), "address zero not allowed");
+    function deposit() external payable onlyOwners {
+        require(msg.sender != address(0), "Address zero not allowed");
+        require(msg.value > 0, "Deposit amount must be greater than zero");
 
-        uint256 transactionId;
+        uint256 transactionId = txCounter; 
 
-      txId[transactionId] = Transaction({
+        txId[transactionId] = Transaction({
             amount: msg.value,
             unlockTime: block.timestamp + 10 days,
             currentTime: block.timestamp,
-            sent: true,
+            sent: false, 
             status: Status.DEPOSITED
         });
 
-        transactionId += 1;
+        txCounter += 1;
 
-        contractBalance += msg.value;
+       contractBalance += msg.value;
 
         emit Deposited(msg.value, transactionId);
     }
 
-    function viewBalance() external view returns(uint256){
-        return contractBalance;
-    }
    
-
     function approveTransaction(uint256 _transactionId, address _to, uint256 _amount) external {
     require(block.timestamp >= txId[_transactionId].unlockTime, "Transaction not yet unlocked");
-    require(msg.sender != address(0), "Address zero not allowed");
-    require(QUOROM > 0, "Quorum not met");
+    require(txId[_transactionId].status == Status.DEPOSITED, "Transaction must be in DEPOSITED state");
+
+    txId[_transactionId].status = Status.APPROVED;
 
     uint256 _approveWithdrawlId = approveWithdrawalId + 1;
 
-    // Ensure this transaction is not already approved
     require(!approveWithdrawal[_approveWithdrawlId].approved, "Transaction already approved");
-
-    // Ensure the sender has not already approved this transaction
     require(!hasApproved[_approveWithdrawlId][msg.sender], "Already approved by this user");
-
-    
+  
     if (approveWithdrawal[_approveWithdrawlId].noOfApproval == 0) {
-        approveWithdrawal[_approveWithdrawlId] = ApproveWithdrawal({
+        approveWithdrawal[_transactionId] = ApproveWithdrawal({
             to: _to,
             amount: _amount,
-            approved: false,
-            status: Status.PENDING,
+            approved: true,
+            status: Status.APPROVED,
             noOfApproval: 1
         });
     } else {
         approveWithdrawal[_approveWithdrawlId].noOfApproval += 1;
     }
+    txId[_transactionId].status = Status.APPROVED;
 
-    // Mark sender as having approved this transaction
     hasApproved[_approveWithdrawlId][msg.sender] = true;
 
-    // Check if quorum is met
     if (approveWithdrawal[_approveWithdrawlId].noOfApproval >= QUOROM) {
         approveWithdrawal[_approveWithdrawlId].approved = true;
         approveWithdrawal[_approveWithdrawlId].status = Status.APPROVED;
     }
 
-    // Increment the approval transaction counter
     approveWithdrawalId = _approveWithdrawlId;
 
     emit Approved(_transactionId);
-}
-
-
-
-    
+   }
 
     function withdraw(uint256 _txId, uint256 _amount) external onlyOwners {
-        require(msg.sender != address(0), "address zero not allowed");
-        require(contractBalance >= _amount, "Insufficient balance");
-        require(txId[_txId].amount == _amount, "Amount does not match transaction amount");
+        require(msg.sender != address(0), "Address zero not allowed");
         require(txId[_txId].status == Status.APPROVED, "Transaction not yet approved");
         require(block.timestamp >= txId[_txId].unlockTime, "Transaction not yet unlocked");
-        
-        contractBalance -= _amount;
+        require(txId[_txId].amount == _amount, "Amount does not match transaction amount");
+        require(address(this).balance >= _amount, "Insufficient balance");
+        require(!txId[_txId].sent, "Transaction already processed");
 
-        ApproveWithdrawal storage _approveWithdrawal = approveWithdrawal[_txId];
+        txId[_txId].sent = true;
 
-        payable(_approveWithdrawal.to).transfer(_amount);
+        // ✅ Ensure recipient address is valid
+        address recipient = approveWithdrawal[_txId].to;
+        require(recipient != address(0), "Invalid recipient");
+
+        // ✅ Transfer funds to the approved recipient
+        payable(recipient).transfer(_amount);
 
         emit Withdrawn(_amount, _txId);
+    }
+
+
+    function viewBalance() external view returns(uint256){
+        return contractBalance;
     }
     
 }
